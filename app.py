@@ -1,35 +1,82 @@
 import json
 from wsgiref.simple_server import make_server
 
-def home_handler(environ):
-    return "200 OK", {"message": "Hello!"}
+class Request:
+    def __init__(self, environ):
+        self.environ = environ
+
+    @property
+    def path(self):
+        return self.environ.get("PATH_INFO", "/")
+
+    @property
+    def method(self):
+        return self.environ.get("REQUEST_METHOD", "GET")
+
+class Response:
+    STATUS_MAP = {
+    200: "200 OK",
+    400: "400 Bad Request",
+    404: "404 Not Found",
+    500: "500 Internal Server Error"
+    }
+
+    def __init__(self, body, status_code=200, headers=None):
+        if headers is None:
+            headers = {"Content-Type": "application/json"}
+        self.body = body
+        self.status_code = status_code
+        self.headers = headers
+       
+
+    @property
+    def encode_body(self):
+        if isinstance(self.body, (dict, list)):
+            text = json.dumps(self.body)
+        else:
+            text = str(self.body)
+        return text.encode('utf-8')
+
+    @property
+    def status_text(self):
+        return self.STATUS_MAP.get(self.status_code, f"{self.status_code} Unknown")
 
 
-def health_handler(environ):
-    return "200 OK", {"status": "online"}
+def home_handler(req):
+    return Response(body={"message": "Hello!"}, status_code=200)
 
 
-def not_found_handler(environ):
-    return "404 Not Found", {"error": "Endpoint does not exist"}
+def health_handler(req):
+    return Response(body={"status": "online"}, status_code=200)
+
+
+def not_found_handler(req):
+    return Response(body={"error": "Endpoint does not exist"}, status_code=404)
 
 routes = {"/": home_handler, "/health": health_handler}
-
+    
 
 def application(environ, start_response):
     
+    req = Request(environ)
 
-    path = environ.get("PATH_INFO", "/")
-    handler = routes.get(path, not_found_handler)
+    # Select handler using req.path instead of raw environ
+    handler = routes.get(req.path, not_found_handler)
 
-    status, response = handler(environ)
+    # Execute handler to get back a Response instance
+    res = handler(req)
 
-    json_data = json.dumps(response)
-    bytes_data = json_data.encode('utf-8')
+    # Encode the body to UTF-8 bytes
+    bytes_data = res.encode_body
 
-    headers = [("Content-Type", "application/json"), ("Content-Length", str(len(bytes_data)))]
+    # Format headers as WSGI expects: list of tuples [('Header-Name', 'Value')]
+    header_list = [(k, str(v)) for k, v in res.headers.items()]
+    header_list.append(("Content-Length", str(len(bytes_data))))
 
-    start_response(status, headers)
+    # Call WSGI callback with status text string (e.g. "200 OK") and header list
+    start_response(res.status_text, header_list)
 
+    # Return body in list as required by WSGI spec
     return [bytes_data]
 
 if __name__ == "__main__":
